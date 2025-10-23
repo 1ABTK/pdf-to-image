@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF to Image Converter</title>
+    <!-- Tailwind CSS CDN for utility-based styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Include PDF.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.7.107/pdf.min.js"></script>
+    <!-- Include JSZip library to create ZIP files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.0/jszip.min.js"></script>
+  </head>
+  <body>
+    <!-- Set a neutral black on white theme. Use only black and white colors. -->
+    <div class="min-h-screen bg-white text-black flex flex-col items-center px-4 py-8">
+      <h1 class="text-3xl font-semibold mb-6">PDF to Image Converter</h1>
+      <div id="controls" class="flex flex-col items-center gap-4 mb-8 w-full max-w-xl">
+        <input
+          type="file"
+          id="file-input"
+          accept="application/pdf"
+          class="block w-full text-sm text-black
+                 file:mr-4 file:py-2 file:px-4
+                 file:rounded-md file:border file:border-black
+                 file:text-sm file:font-semibold
+                 file:bg-white file:text-black
+                 hover:file:bg-black hover:file:text-white"
+        />
+        <!-- Show selected file name and size -->
+        <div id="file-info" class="text-sm text-black"></div>
+        <button
+          id="download-btn"
+          class="px-4 py-2 rounded-md bg-black text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled
+        >
+          Download
+        </button>
+        <!-- Placeholder for output file name and size -->
+        <div id="output-info" class="text-sm text-black"></div>
+        <!-- No additional options: the converter will process all pages by default. -->
+        <!-- Progress bar container -->
+        <div id="progress-wrapper" class="w-full mt-4 hidden">
+          <div class="w-full bg-black/10 rounded-full h-2.5">
+            <div id="progress-bar" class="bg-black h-2.5 rounded-full" style="width: 0%"></div>
+          </div>
+          <p id="progress-text" class="mt-1 text-sm text-black text-center">Processing...</p>
+        </div>
+      </div>
+      <!-- The images will be displayed in a flex container that wraps and centers its children. Each image has a constrained width for a smaller preview. -->
+      <div id="image-container" class="flex flex-wrap justify-center gap-4 w-full"></div>
+    </div>
+
+    <script>
+      // Specify the workerSrc property for PDF.js
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.7.107/pdf.worker.min.js";
+
+      const fileInput = document.getElementById("file-input");
+      const imageContainer = document.getElementById("image-container");
+      const downloadBtn = document.getElementById("download-btn");
+      const fileInfo = document.getElementById("file-info");
+      const outputInfo = document.getElementById("output-info");
+      let currentFileName = "";
+      // Progress bar elements
+      const progressWrapper = document.getElementById("progress-wrapper");
+      const progressBar = document.getElementById("progress-bar");
+      const progressText = document.getElementById("progress-text");
+
+      /**
+       * Format bytes as human-readable text.
+       * @param {number} bytes
+       * @returns {string}
+       */
+      function formatBytes(bytes) {
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        if (bytes === 0) return '0 Bytes';
+        const i = Math.floor(Math.log(bytes) / Math.log(1024));
+        const val = (bytes / Math.pow(1024, i)).toFixed(2);
+        return `${val} ${sizes[i]}`;
+      }
+
+      /**
+       * Process a PDF file: render pages to images, update progress and enable download.
+       * @param {File} file
+       */
+      async function processFile(file) {
+        // Store the current file name without extension for later naming
+        const nameParts = file.name.split('.');
+        nameParts.pop();
+        currentFileName = nameParts.join('.');
+        // Display input file size
+        fileInfo.textContent = `Input: ${file.name} (${formatBytes(file.size)})`;
+        // Clear previous output info
+        outputInfo.textContent = "";
+        // Clear any previously rendered images and disable download button
+        imageContainer.innerHTML = "";
+        downloadBtn.disabled = true;
+        // Reset and show progress bar
+        progressBar.style.width = "0%";
+        progressText.textContent = "Processing...";
+        progressWrapper.classList.remove("hidden");
+
+        const reader = new FileReader();
+        reader.onload = function () {
+          const typedArray = new Uint8Array(this.result);
+          pdfjsLib
+            .getDocument({ data: typedArray })
+            .promise.then(async (pdf) => {
+              const numPages = pdf.numPages;
+              // Process all pages in the PDF
+              const startPage = 1;
+              const endPage = numPages;
+              const totalPagesToProcess = endPage - startPage + 1;
+              for (let pageNum = startPage; pageNum <= endPage; pageNum++) {
+                const page = await pdf.getPage(pageNum);
+                const viewport = page.getViewport({ scale: 3 });
+                const canvas = document.createElement("canvas");
+                const context = canvas.getContext("2d");
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                await page.render({ canvasContext: context, viewport: viewport }).promise;
+                const img = document.createElement("img");
+                img.className = "page-image w-64 h-auto rounded-md shadow-md border border-black mx-auto";
+                img.alt = "Page " + pageNum;
+                img.src = canvas.toDataURL("image/png");
+                imageContainer.appendChild(img);
+                const progress = ((pageNum - startPage + 1) / totalPagesToProcess) * 100;
+                progressBar.style.width = progress + "%";
+                progressText.textContent = `Processing: Page ${pageNum - startPage + 1} of ${totalPagesToProcess}`;
+              }
+              if (pdf.numPages > 0) {
+                downloadBtn.disabled = false;
+              }
+              progressBar.style.width = "100%";
+              progressText.textContent = "Processing complete";
+            })
+            .catch((error) => {
+              console.error("Error loading PDF:", error);
+            });
+        };
+        reader.readAsArrayBuffer(file);
+      }
+
+      // Handle file input change
+      fileInput.addEventListener("change", (event) => {
+        const file = event.target.files[0];
+        if (file) {
+          processFile(file);
+        }
+      });
+
+      // Enable drag-and-drop file loading
+      document.addEventListener('dragover', function (e) {
+        e.preventDefault();
+      });
+      document.addEventListener('drop', function (e) {
+        e.preventDefault();
+        const droppedFiles = e.dataTransfer.files;
+        if (droppedFiles && droppedFiles.length > 0) {
+          const file = droppedFiles[0];
+          if (file.type === 'application/pdf') {
+            processFile(file);
+          }
+        }
+      });
+
+      // Handle downloading of images. If only one page is loaded, download as PNG.
+      // If multiple pages are loaded, download as a ZIP archive.
+      downloadBtn.addEventListener("click", async () => {
+        const images = imageContainer.querySelectorAll("img.page-image");
+        if (images.length === 0) {
+          return;
+        }
+        // Create a date prefix in YYYYMMDD format
+        const now = new Date();
+        const datePrefix = now.toISOString().split('T')[0].replace(/-/g, '');
+        const baseFileName = `${datePrefix}-${currentFileName}-to-image`;
+        if (images.length === 1) {
+          // Prepare single image file
+          const img = images[0];
+          // Estimate PNG size from base64 length
+          const base64 = img.src.split(',')[1];
+          const byteLength = Math.floor(base64.length * 0.75);
+          const fileName = `${baseFileName}.png`;
+          outputInfo.textContent = `Output: ${fileName} (${formatBytes(byteLength)})`;
+          const a = document.createElement("a");
+          a.href = img.src;
+          a.download = fileName;
+          a.click();
+        } else {
+          // Pack multiple images into a ZIP archive
+          const zip = new JSZip();
+          images.forEach((img, idx) => {
+            const data = img.src.split(",")[1]; // Remove data URL prefix
+            zip.file(`page-${idx + 1}.png`, data, { base64: true });
+          });
+          const content = await zip.generateAsync({ type: "blob" });
+          const fileName = `${baseFileName}.zip`;
+          outputInfo.textContent = `Output: ${fileName} (${formatBytes(content.size)})`;
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(content);
+          a.download = fileName;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 0);
+        }
+      });
+    </script>
+  </body>
+</html>
